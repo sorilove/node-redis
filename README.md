@@ -11,6 +11,7 @@
 
 node-redis is a modern, high performance [Redis](https://redis.io) client for Node.js.
 
+Fixed an unsubscribe bug with shard pub sub in an existing package.
 
 ## Packages
 
