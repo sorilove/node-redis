@@ -1,8 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    // "outDir": "../../dist"
-    "outDir": "E:\\sources\\node_workspace\\node_modules\\sorilove-redis\\dist"
+    "outDir": "../../dist"
   },
   "include": [
     "./index.ts",
