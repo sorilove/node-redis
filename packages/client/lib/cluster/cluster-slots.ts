@@ -247,7 +247,6 @@ export default class RedisClusterSlots<
 
         try {
             // using `CLUSTER SLOTS` and not `CLUSTER SHARDS` to support older versions
-            // return await client.clusterSlots();
             const reply = await client.clusterSlots();
             if (reply instanceof Error) {
                 throw reply;
@@ -344,13 +343,12 @@ export default class RedisClusterSlots<
                 socket: this.#getNodeAddress(node.address) ?? {
                     host: node.host,
                     port: node.port,
-
-                    reconnectStrategy: (retries, cause) => {
-                        if (5 < retries) {
+                    reconnectStrategy: (retries) => {
+                        if (45 < retries) {
                             client.emit(`failover`);
                             return false;
                         }
-                        return 1000;
+                        return Math.min(retries * 50, 500);
                     }
                 },
                 readonly
@@ -374,11 +372,7 @@ export default class RedisClusterSlots<
                     this.#emit('sharded-channel-moved-error', err, channel, listeners);
                 }
             }
-            console.log(`completed failover - masters: ${this.masters.length}, master_info: ${this.masters.map(node => `${node.address}`).join(', ')}`);
-        }).on('reconnecting', () => {
-            console.log(`reconnecting...`);
-        }).on('end', async () => {
-            await this.#discoverWithRootNodes();
+            console.log(`failovered, masters: ${this.masters.map(node => `${node.address}`).join(', ')}`);
         });
 
         await client.connect();
@@ -474,23 +468,6 @@ export default class RedisClusterSlots<
             fn(client);
     }
 
-    /*
-    getClient(
-        firstKey: RedisCommandArgument | undefined,
-        isReadonly: boolean | undefined
-    ): ClientOrPromise<M, F, S> {
-        if (!firstKey) {
-            return this.nodeClient(this.getRandomNode());
-        }
-
-        const slotNumber = calculateSlot(firstKey);
-        if (!isReadonly) {
-            return this.nodeClient(this.slots[slotNumber].master);
-        }
-
-        return this.nodeClient(this.getSlotRandomNode(slotNumber));
-    }
-    */
     async getClient(
         firstKey: RedisCommandArgument | undefined,
         isReadonly: boolean | undefined

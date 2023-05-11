@@ -15,7 +15,6 @@ import { ClientClosedError, ClientOfflineError, DisconnectsClientError } from '.
 import { URL } from 'url';
 import { TcpSocketConnectOpts } from 'net';
 import { PubSubType, PubSubListener, PubSubTypeListeners, ChannelListeners } from './pub-sub';
-import { callbackify } from 'util';
 
 export interface RedisClientOptions<
     M extends RedisModules = RedisModules,
@@ -75,13 +74,13 @@ type WithCommands = {
 
 export type WithModules<M extends RedisModules> = {
     [P in keyof M as ExcludeMappedString<P>]: {
-        [C in keyof M[P] as ExcludeMappedString<C>]: RedisCommandSignature<M[P][C]>;
+        [C in keyof M[P]as ExcludeMappedString<C>]: RedisCommandSignature<M[P][C]>;
     };
 };
 
 export type WithFunctions<F extends RedisFunctions> = {
     [P in keyof F as ExcludeMappedString<P>]: {
-        [FF in keyof F[P] as ExcludeMappedString<FF>]: RedisCommandSignature<F[P][FF]>;
+        [FF in keyof F[P]as ExcludeMappedString<FF>]: RedisCommandSignature<F[P][FF]>;
     };
 };
 
@@ -350,7 +349,7 @@ export default class RedisClient<
             }
         };
 
-        for (const [ name, command ] of Object.entries(COMMANDS as RedisCommands)) {
+        for (const [name, command] of Object.entries(COMMANDS as RedisCommands)) {
             this.#defineLegacyCommand(name, command);
             (this as any)[name.toLowerCase()] ??= (this as any)[name];
         }
@@ -450,10 +449,7 @@ export default class RedisClient<
         options?: ClientCommandOptions
     ): Promise<T> {
         if (!this.#socket.isOpen) {
-            // by sorilove:
-            console.log(`!! ClientClosedError`);
             return Promise.reject(new ClientClosedError());
-            // return Promise.resolve() as any;
         } else if (options?.isolated) {
             return this.executeIsolated(isolatedClient =>
                 isolatedClient.sendCommand(args, {
@@ -462,10 +458,7 @@ export default class RedisClient<
                 })
             );
         } else if (!this.#socket.isReady && this.#options?.disableOfflineQueue) {
-            // by sorilove:
-            console.log(`!! ClientOfflineError`);
             return Promise.reject(new ClientOfflineError());
-            // return Promise.resolve() as any;
         }
 
         const promise = this.#queue.addCommand<T>(args, options);

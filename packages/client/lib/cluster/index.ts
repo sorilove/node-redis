@@ -1,3 +1,4 @@
+import { strict as assert } from 'assert';
 import COMMANDS from './commands';
 import { RedisCommand, RedisCommandArgument, RedisCommandArguments, RedisCommandRawReply, RedisCommandReply, RedisFunctions, RedisModules, RedisExtensions, RedisScript, RedisScripts, RedisCommandSignature, RedisFunction } from '../commands';
 import { ClientCommandOptions, RedisClientOptions, RedisClientType, WithFunctions, WithModules, WithScripts } from '../client';
@@ -181,7 +182,6 @@ export default class RedisCluster<
         catch (e: unknown) {
             this.emit('error', e);
             if (e instanceof Error) {
-                console.error(`[sendCommand_error] ${e.message}`);
                 return e;
             }
             throw e;
@@ -260,9 +260,10 @@ export default class RedisCluster<
                 client = await this.#slots.getClient(firstKey, isReadonly);
                 return await executor(client);
             } catch (err) {
-                if (++i > maxCommandRedirections || !(err instanceof ErrorReply) || client === undefined) {
+                if (++i > maxCommandRedirections || !(err instanceof ErrorReply)) {
                     throw err;
                 }
+                assert.ok(client !== undefined);
 
                 if (err.message.startsWith('ASK')) {
                     const address = err.message.substring(err.message.lastIndexOf(' ') + 1);

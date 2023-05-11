@@ -35,7 +35,6 @@ export type OnShardedChannelMoved = (channel: string, listeners: ChannelListener
 export default class RedisCommandsQueue {
     static #flushQueue<T extends CommandWaitingForReply>(queue: LinkedList<T>, err: Error): void {
         while (queue.length) {
-            // by sorilove: flushQueue
             // queue.shift()!.reject(err);
             queue.shift();
         }
@@ -62,7 +61,7 @@ export default class RedisCommandsQueue {
         onReply: reply => {
             if (this.#pubSub.isActive && Array.isArray(reply)) {
                 if (this.#pubSub.handleMessageReply(reply as Array<Buffer>)) return;
-                
+
                 const isShardedUnsubscribe = PubSub.isShardedUnsubscribe(reply as Array<Buffer>);
                 if (isShardedUnsubscribe && !this.#waitingForReply.length) {
                     const channel = (reply[1] as Buffer).toString();
@@ -88,7 +87,7 @@ export default class RedisCommandsQueue {
                     return;
                 }
             }
-            
+
             const { resolve, reject } = this.#waitingForReply.shift()!;
             if (reply instanceof ErrorReply) {
                 reject(reply);
