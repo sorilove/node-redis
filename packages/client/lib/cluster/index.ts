@@ -98,7 +98,7 @@ export default class RedisCluster<
     readonly #options: RedisClusterOptions<M, F, S>;
 
     readonly #slots: RedisClusterSlots<M, F, S>;
-    
+
     get slots() {
         return this.#slots.slots;
     }
@@ -170,12 +170,22 @@ export default class RedisCluster<
         isReadonly: boolean | undefined,
         args: RedisCommandArguments,
         options?: ClientCommandOptions
-    ): Promise<T> {
-        return this.#execute(
-            firstKey,
-            isReadonly,
-            client => client.sendCommand<T>(args, options)
-        );
+    ): Promise<T | Error> {
+        try {
+            return await this.#execute(
+                firstKey,
+                isReadonly,
+                client => client.sendCommand<T>(args, options)
+            );
+        }
+        catch (e: unknown) {
+            this.emit('error', e);
+            if (e instanceof Error) {
+                console.error(`[sendCommand_error] ${e.message}`);
+                return e;
+            }
+            throw e;
+        }
     }
 
     async functionsExecutor<F extends RedisFunction>(
@@ -203,7 +213,7 @@ export default class RedisCluster<
         originalArgs: Array<unknown>,
         redisArgs: RedisCommandArguments,
         options?: ClientCommandOptions
-    ): Promise<RedisCommandRawReply> {
+    ): Promise<RedisCommandRawReply | Error> {
         return this.#execute(
             RedisCluster.extractFirstKey(fn, originalArgs, redisArgs),
             fn.IS_READ_ONLY,
@@ -230,7 +240,7 @@ export default class RedisCluster<
         originalArgs: Array<unknown>,
         redisArgs: RedisCommandArguments,
         options?: ClientCommandOptions
-    ): Promise<RedisCommandRawReply> {
+    ): Promise<RedisCommandRawReply | Error> {
         return this.#execute(
             RedisCluster.extractFirstKey(script, originalArgs, redisArgs),
             script.IS_READ_ONLY,
@@ -244,12 +254,13 @@ export default class RedisCluster<
         executor: (client: RedisClientType<M, F, S>) => Promise<Reply>
     ): Promise<Reply> {
         const maxCommandRedirections = this.#options.maxCommandRedirections ?? 16;
-        let client = await this.#slots.getClient(firstKey, isReadonly);
-        for (let i = 0;; i++) {
+        for (let i = 0; ; i++) {
+            let client;
             try {
+                client = await this.#slots.getClient(firstKey, isReadonly);
                 return await executor(client);
             } catch (err) {
-                if (++i > maxCommandRedirections || !(err instanceof ErrorReply)) {
+                if (++i > maxCommandRedirections || !(err instanceof ErrorReply) || client === undefined) {
                     throw err;
                 }
 
@@ -310,7 +321,7 @@ export default class RedisCluster<
         listener?: PubSubListener<boolean>,
         bufferMode?: T
     ) {
-        return this.#slots.executeUnsubscribeCommand(client => 
+        return this.#slots.executeUnsubscribeCommand(client =>
             client.UNSUBSCRIBE(channels, listener, bufferMode)
         );
     }
@@ -333,7 +344,7 @@ export default class RedisCluster<
         listener?: PubSubListener<T>,
         bufferMode?: T
     ) {
-        return this.#slots.executeUnsubscribeCommand(client => 
+        return this.#slots.executeUnsubscribeCommand(client =>
             client.PUNSUBSCRIBE(patterns, listener, bufferMode)
         );
     }
@@ -344,11 +355,11 @@ export default class RedisCluster<
         channels: string | Array<string>,
         listener: PubSubListener<T>,
         bufferMode?: T
-    ) { 
+    ) {
         const maxCommandRedirections = this.#options.maxCommandRedirections ?? 16,
             firstChannel = Array.isArray(channels) ? channels[0] : channels;
         let client = await this.#slots.getShardedPubSubClient(firstChannel);
-        for (let i = 0;; i++) {
+        for (let i = 0; ; i++) {
             try {
                 return await client.SSUBSCRIBE(channels, listener, bufferMode);
             } catch (err) {
@@ -391,7 +402,7 @@ export default class RedisCluster<
     }
 
     nodeClient(node: ShardNode<M, F, S>) {
-        return this.#slots.nodeClient(node); 
+        return this.#slots.nodeClient(node);
     }
 
     getRandomNode() {

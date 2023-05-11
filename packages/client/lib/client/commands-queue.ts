@@ -35,7 +35,9 @@ export type OnShardedChannelMoved = (channel: string, listeners: ChannelListener
 export default class RedisCommandsQueue {
     static #flushQueue<T extends CommandWaitingForReply>(queue: LinkedList<T>, err: Error): void {
         while (queue.length) {
-            queue.shift()!.reject(err);
+            // by sorilove: flushQueue
+            // queue.shift()!.reject(err);
+            queue.shift();
         }
     }
 

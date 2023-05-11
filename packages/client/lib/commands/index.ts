@@ -45,7 +45,7 @@ export type RedisCommandSignature<
     ConvertArgumentType<
         RedisCommandReply<Command>,
         Options['returnBuffers'] extends true ? Buffer : string
-    >
+    > | Error
 >;
 
 export interface RedisCommands {

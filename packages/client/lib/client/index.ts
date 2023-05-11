@@ -450,7 +450,10 @@ export default class RedisClient<
         options?: ClientCommandOptions
     ): Promise<T> {
         if (!this.#socket.isOpen) {
+            // by sorilove:
+            console.log(`!! ClientClosedError`);
             return Promise.reject(new ClientClosedError());
+            // return Promise.resolve() as any;
         } else if (options?.isolated) {
             return this.executeIsolated(isolatedClient =>
                 isolatedClient.sendCommand(args, {
@@ -459,7 +462,10 @@ export default class RedisClient<
                 })
             );
         } else if (!this.#socket.isReady && this.#options?.disableOfflineQueue) {
+            // by sorilove:
+            console.log(`!! ClientOfflineError`);
             return Promise.reject(new ClientOfflineError());
+            // return Promise.resolve() as any;
         }
 
         const promise = this.#queue.addCommand<T>(args, options);

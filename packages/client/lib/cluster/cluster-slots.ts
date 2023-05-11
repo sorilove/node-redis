@@ -80,7 +80,7 @@ export type PubSubNode<
 > = Required<Node<M, F, S>>;
 
 type PubSubToResubscribe = Record<
-    PubSubType.CHANNELS | PubSubType.PATTERNS,
+    PubSubType.CHANNELS | PubSubType.PATTERNS | PubSubType.SHARDED,
     PubSubTypeListeners
 >;
 
@@ -138,7 +138,7 @@ export default class RedisClusterSlots<
 
     async #discoverWithRootNodes() {
         let start = Math.floor(Math.random() * this.#options.rootNodes.length);
-        for (let i = start; i < this.#options.rootNodes.length; i++) {    
+        for (let i = start; i < this.#options.rootNodes.length; i++) {
             if (await this.#discover(this.#options.rootNodes[i])) return;
         }
 
@@ -191,15 +191,17 @@ export default class RedisClusterSlots<
                     this.pubSubNode = undefined;
                 } else {
                     promises.push(this.pubSubNode.client.disconnect());
-                    
-                    const channelsListeners = this.pubSubNode.client.getPubSubListeners(PubSubType.CHANNELS),
-                        patternsListeners = this.pubSubNode.client.getPubSubListeners(PubSubType.PATTERNS);
 
-                    if (channelsListeners.size || patternsListeners.size) {
+                    const channelsListeners = this.pubSubNode.client.getPubSubListeners(PubSubType.CHANNELS),
+                        patternsListeners = this.pubSubNode.client.getPubSubListeners(PubSubType.PATTERNS),
+                        shardedListeners = this.pubSubNode.client.getPubSubListeners(PubSubType.SHARDED);
+
+                    if (channelsListeners.size || patternsListeners.size || shardedListeners.size) {
                         promises.push(
                             this.#initiatePubSubClient({
                                 [PubSubType.CHANNELS]: channelsListeners,
-                                [PubSubType.PATTERNS]: patternsListeners
+                                [PubSubType.PATTERNS]: patternsListeners,
+                                [PubSubType.SHARDED]: shardedListeners
                             })
                         );
                     }
@@ -245,7 +247,12 @@ export default class RedisClusterSlots<
 
         try {
             // using `CLUSTER SLOTS` and not `CLUSTER SHARDS` to support older versions
-            return await client.clusterSlots();
+            // return await client.clusterSlots();
+            const reply = await client.clusterSlots();
+            if (reply instanceof Error) {
+                throw reply;
+            }
+            return reply;
         } finally {
             await client.disconnect();
         }
@@ -285,7 +292,7 @@ export default class RedisClusterSlots<
         } else {
             result = options;
         }
-        
+
         if (disableReconnect) {
             result ??= {};
             result.socket ??= {};
@@ -315,11 +322,11 @@ export default class RedisClusterSlots<
                 readonly,
                 client: undefined
             };
-            
+
             if (eagerConnent) {
                 promises.push(this.#createNodeClient(node));
             }
-            
+
             this.nodeByAddress.set(address, node);
         }
 
@@ -336,12 +343,43 @@ export default class RedisClusterSlots<
             this.#clientOptionsDefaults({
                 socket: this.#getNodeAddress(node.address) ?? {
                     host: node.host,
-                    port: node.port
+                    port: node.port,
+
+                    reconnectStrategy: (retries, cause) => {
+                        if (5 < retries) {
+                            client.emit(`failover`);
+                            return false;
+                        }
+                        return 1000;
+                    }
                 },
                 readonly
             })
         );
-        client.on('error', err => this.#emit('error', err));
+
+        client.on('error', async err => {
+            this.#emit('error', err);
+        }).on('failover', async () => {
+            const pubsubListeners = client.getPubSubListeners(PubSubType.SHARDED);
+            await this.#discoverWithRootNodes();
+            for (const [channel, listeners] of pubsubListeners) {
+                try {
+                    const redirectTo = await this.getShardedPubSubClient(channel);
+                    redirectTo.extendPubSubChannelListeners(
+                        PubSubType.SHARDED,
+                        channel,
+                        listeners
+                    )
+                } catch (err) {
+                    this.#emit('sharded-channel-moved-error', err, channel, listeners);
+                }
+            }
+            console.log(`completed failover - masters: ${this.masters.length}, master_info: ${this.masters.map(node => `${node.address}`).join(', ')}`);
+        }).on('reconnecting', () => {
+            console.log(`reconnecting...`);
+        }).on('end', async () => {
+            await this.#discoverWithRootNodes();
+        });
 
         await client.connect();
 
@@ -436,10 +474,31 @@ export default class RedisClusterSlots<
             fn(client);
     }
 
+    /*
     getClient(
         firstKey: RedisCommandArgument | undefined,
         isReadonly: boolean | undefined
     ): ClientOrPromise<M, F, S> {
+        if (!firstKey) {
+            return this.nodeClient(this.getRandomNode());
+        }
+
+        const slotNumber = calculateSlot(firstKey);
+        if (!isReadonly) {
+            return this.nodeClient(this.slots[slotNumber].master);
+        }
+
+        return this.nodeClient(this.getSlotRandomNode(slotNumber));
+    }
+    */
+    async getClient(
+        firstKey: RedisCommandArgument | undefined,
+        isReadonly: boolean | undefined
+    ) {
+        if (this.#runningRediscoverPromise !== undefined) {
+            await this.#runningRediscoverPromise;
+        }
+
         if (!firstKey) {
             return this.nodeClient(this.getRandomNode());
         }
@@ -497,7 +556,7 @@ export default class RedisClusterSlots<
 
         while (true) {
             yield slot.master;
-            
+
             for (const replica of slot.replicas) {
                 yield replica;
             }
@@ -532,7 +591,7 @@ export default class RedisClusterSlots<
             node = index < this.masters.length ?
                 this.masters[index] :
                 this.replicas[index - this.masters.length];
-    
+
         this.pubSubNode = {
             address: node.address,
             client: this.#createClient(node, true)
@@ -540,10 +599,11 @@ export default class RedisClusterSlots<
                     if (toResubscribe) {
                         await Promise.all([
                             client.extendPubSubListeners(PubSubType.CHANNELS, toResubscribe[PubSubType.CHANNELS]),
-                            client.extendPubSubListeners(PubSubType.PATTERNS, toResubscribe[PubSubType.PATTERNS])
+                            client.extendPubSubListeners(PubSubType.PATTERNS, toResubscribe[PubSubType.PATTERNS]),
+                            client.extendPubSubListeners(PubSubType.SHARDED, toResubscribe[PubSubType.SHARDED])
                         ]);
                     }
-                    
+
                     this.pubSubNode!.client = client;
                     return client;
                 })
@@ -552,7 +612,7 @@ export default class RedisClusterSlots<
                     throw err;
                 })
         };
-        
+
         return this.pubSubNode.client as Promise<RedisClientType<M, F, S>>;
     }
 
@@ -586,7 +646,7 @@ export default class RedisClusterSlots<
                             listeners
                         );
                     } catch (err) {
-                        this.#emit('sharded-shannel-moved-error', err, channel, listeners);
+                        this.#emit('sharded-channel-moved-error', err, channel, listeners);
                     }
                 });
 
